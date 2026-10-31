@@ -5,11 +5,13 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
+    "start": "next start --hostname 0.0.0.0",
     "lint": "eslint"
   },
   "dependencies": {
     "next": "16.4.3",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^5.4.296",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },
