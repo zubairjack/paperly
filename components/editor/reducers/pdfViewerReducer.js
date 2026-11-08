@@ -11,13 +11,19 @@ export function pdfViewerReducer(state, action) {
       return {
         ...state,
         totalPages: action.payload,
-        currentPage: Math.min(state.currentPage, action.payload || 1),
+        currentPage: Math.min(
+          Math.max(state.currentPage, 1),
+          Math.max(action.payload, 1),
+        ),
       };
 
     case "SET_CURRENT_PAGE":
       return {
         ...state,
-        currentPage: Math.min(Math.max(action.payload, 1), state.totalPages),
+        currentPage:
+          state.totalPages > 0
+            ? Math.min(Math.max(action.payload, 1), state.totalPages)
+            : Math.max(action.payload, 1),
       };
 
     case "NEXT_PAGE":
@@ -60,7 +66,7 @@ export function pdfViewerReducer(state, action) {
       };
 
     case "RESET_VIEWER":
-      return initialPdfViewerState;
+      return { ...initialPdfViewerState };
 
     default:
       return state;

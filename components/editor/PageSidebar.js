@@ -1,11 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export default function PageSidebar({ file, currentPage, onPageSelect }) {
   const [thumbnails, setThumbnails] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
+
+  // Referensi thumbnail halaman yang sedang aktif
+  const activeThumbnailRef = useRef(null);
 
   useEffect(() => {
     if (!file) {
@@ -54,15 +57,9 @@ export default function PageSidebar({ file, currentPage, onPageSelect }) {
 
           if (isCancelled) return;
 
-          // Ukuran thumbnail
-          const originalViewport = page.getViewport({
-            scale: 1,
-          });
-
+          const originalViewport = page.getViewport({ scale: 1 });
           const thumbnailWidth = 120;
-
           const scale = thumbnailWidth / originalViewport.width;
-
           const viewport = page.getViewport({ scale });
 
           const canvas = document.createElement("canvas");
@@ -83,7 +80,6 @@ export default function PageSidebar({ file, currentPage, onPageSelect }) {
             src: canvas.toDataURL("image/png"),
           });
 
-          // Tampilkan thumbnail secara bertahap
           setThumbnails([...generatedThumbnails]);
 
           canvas.width = 0;
@@ -111,6 +107,16 @@ export default function PageSidebar({ file, currentPage, onPageSelect }) {
       }
     };
   }, [file]);
+
+  // Otomatis mengikuti thumbnail halaman aktif
+  useEffect(() => {
+    if (!activeThumbnailRef.current) return;
+
+    activeThumbnailRef.current.scrollIntoView({
+      behavior: "smooth",
+      block: "nearest",
+    });
+  }, [currentPage, thumbnails]);
 
   return (
     <aside className="h-full bg-surface p-4">
@@ -150,6 +156,7 @@ export default function PageSidebar({ file, currentPage, onPageSelect }) {
           return (
             <button
               key={thumbnail.pageNumber}
+              ref={isActive ? activeThumbnailRef : null}
               type="button"
               onClick={() => onPageSelect(thumbnail.pageNumber)}
               aria-pressed={isActive}
@@ -159,7 +166,7 @@ export default function PageSidebar({ file, currentPage, onPageSelect }) {
                   : "border-border bg-surface hover:border-primary"
               }`}
             >
-              {/* THUMBNAIL ASLI PDF */}
+              {/* THUMBNAIL PDF */}
               <div className="mx-auto flex justify-center overflow-hidden bg-white shadow-shadow-sm">
                 <img
                   src={thumbnail.src}

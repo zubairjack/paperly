@@ -22,7 +22,10 @@ export default function EditorPage() {
 
         {/* Workspace */}
         <div className="min-h-0 flex-1 overflow-hidden">
-          <EditorWorkspace selectedFile={selectedFile} />
+          <EditorWorkspace
+            key={selectedFile?.name || "empty"}
+            selectedFile={selectedFile}
+          />
         </div>
       </main>
     </ThemeProvider>

@@ -6,22 +6,152 @@ import PageSidebar from "@/components/editor/PageSidebar";
 import EditorToolbar from "@/components/editor/EditorToolbar";
 import PropertiesPanel from "@/components/editor/PropertiesPanel";
 import PdfViewer from "@/components/editor/PdfViewer";
+import SignatureModal from "@/components/editor/SignatureModal";
+import StampPickerModal from "@/components/editor/StampPickerModal";
 
 import {
   editorReducer,
   initialEditorState,
 } from "@/components/editor/reducers/editorReducer";
 
+const generateId = () => {
+  if (
+    typeof crypto !== "undefined" &&
+    typeof crypto.randomUUID === "function"
+  ) {
+    return crypto.randomUUID();
+  }
+
+  return `object-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+};
+
+// Menghilangkan area transparan di sekitar tanda tangan
+const trimTransparentImage = (imageData) => {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+
+    image.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = image.naturalWidth;
+      canvas.height = image.naturalHeight;
+
+      const context = canvas.getContext("2d");
+      context.drawImage(image, 0, 0);
+
+      const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+
+      const { data, width, height } = imageData;
+
+      let minX = width;
+      let minY = height;
+      let maxX = -1;
+      let maxY = -1;
+
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const alpha = data[(y * width + x) * 4 + 3];
+
+          if (alpha > 0) {
+            minX = Math.min(minX, x);
+            minY = Math.min(minY, y);
+            maxX = Math.max(maxX, x);
+            maxY = Math.max(maxY, y);
+          }
+        }
+      }
+
+      // Jika gambar kosong, gunakan gambar asli
+      if (maxX === -1) {
+        resolve(imageDataToResult(imageData, canvas));
+        return;
+      }
+
+      const cropWidth = maxX - minX + 1;
+      const cropHeight = maxY - minY + 1;
+
+      const croppedCanvas = document.createElement("canvas");
+      croppedCanvas.width = cropWidth;
+      croppedCanvas.height = cropHeight;
+
+      const croppedContext = croppedCanvas.getContext("2d");
+
+      croppedContext.drawImage(
+        canvas,
+        minX,
+        minY,
+        cropWidth,
+        cropHeight,
+        0,
+        0,
+        cropWidth,
+        cropHeight,
+      );
+
+      resolve({
+        content: croppedCanvas.toDataURL("image/png"),
+        width: cropWidth,
+        height: cropHeight,
+      });
+    };
+
+    image.onerror = reject;
+    image.src = imageData;
+  });
+};
+
+const imageDataToResult = (imageData, canvas) => ({
+  content: canvas.toDataURL("image/png"),
+  width: canvas.width,
+  height: canvas.height,
+});
+
 export default function EditorWorkspace({ selectedFile }) {
   const [activePanel, setActivePanel] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
+  const [isSignatureModalOpen, setIsSignatureModalOpen] = useState(false);
+
+  const [isStampPickerOpen, setIsStampPickerOpen] = useState(false);
+  const [selectedStamp, setSelectedStamp] = useState(null);
 
   const [editorState, dispatch] = useReducer(editorReducer, initialEditorState);
 
+  const selectedObject =
+    editorState.objects.find(
+      (object) => object.id === editorState.selectedObjectId,
+    ) || null;
+
+  // Menangani tombol Delete dan Backspace
   useEffect(() => {
-    setCurrentPage(1);
-    dispatch({ type: "RESET_EDITOR" });
-  }, [selectedFile]);
+    const handleKeyDown = (event) => {
+      const isDeleteKey = event.key === "Delete" || event.key === "Backspace";
+
+      if (!isDeleteKey) return;
+
+      const target = event.target;
+
+      const isTyping =
+        target instanceof HTMLElement &&
+        (target.isContentEditable ||
+          ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
+
+      if (isTyping) return;
+
+      if (!editorState.selectedObjectId) return;
+
+      event.preventDefault();
+
+      dispatch({
+        type: "DELETE_OBJECT",
+        payload: editorState.selectedObjectId,
+      });
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [editorState.selectedObjectId]);
 
   const closePanel = () => setActivePanel(null);
 
@@ -31,9 +161,29 @@ export default function EditorWorkspace({ selectedFile }) {
   };
 
   const handleToolChange = (toolId) => {
+    if (toolId === "signature") {
+      setIsSignatureModalOpen(true);
+      return;
+    }
+
+    if (toolId === "stamp") {
+      setIsStampPickerOpen(true);
+      return;
+    }
+
     dispatch({
       type: "SET_ACTIVE_TOOL",
       payload: toolId,
+    });
+  };
+
+  const handleStampSelect = (stamp) => {
+    setSelectedStamp(stamp);
+    setIsStampPickerOpen(false);
+
+    dispatch({
+      type: "SET_ACTIVE_TOOL",
+      payload: "stamp",
     });
   };
 
@@ -56,6 +206,45 @@ export default function EditorWorkspace({ selectedFile }) {
       type: "UPDATE_OBJECT",
       payload: { id, changes },
     });
+  };
+
+  const handleDeleteObject = (id) => {
+    dispatch({
+      type: "DELETE_OBJECT",
+      payload: id,
+    });
+  };
+
+  // Menyimpan tanda tangan ke halaman PDF aktif
+  const handleSaveSignature = async (imageData) => {
+    try {
+      const trimmedImage = await trimTransparentImage(imageData);
+
+      const initialWidth = 18;
+
+      handleAddObject({
+        id: generateId(),
+        type: "signature",
+        pageNumber: currentPage,
+        x: 35,
+        y: 40,
+        width: initialWidth,
+        height: 1,
+        content: trimmedImage.content,
+        imageWidth: trimmedImage.width,
+        imageHeight: trimmedImage.height,
+        aspectRatioAdjusted: false,
+      });
+
+      dispatch({
+        type: "SET_ACTIVE_TOOL",
+        payload: "select",
+      });
+
+      setIsSignatureModalOpen(false);
+    } catch (error) {
+      console.error("Gagal memproses tanda tangan:", error);
+    }
   };
 
   return (
@@ -111,6 +300,7 @@ export default function EditorWorkspace({ selectedFile }) {
               onSelectObject={handleSelectObject}
               onAddObject={handleAddObject}
               onUpdateObject={handleUpdateObject}
+              selectedStamp={selectedStamp}
             />
           ) : (
             <div className="flex min-h-[650px] min-w-full items-center justify-center rounded-lg border border-dashed border-border-strong bg-surface p-4">
@@ -134,7 +324,11 @@ export default function EditorWorkspace({ selectedFile }) {
 
       {/* PROPERTIES PANEL DESKTOP */}
       <aside className="hidden min-h-0 overflow-y-auto border-l border-border bg-surface lg:block">
-        <PropertiesPanel />
+        <PropertiesPanel
+          selectedObject={selectedObject}
+          onDeleteObject={handleDeleteObject}
+          onUpdateObject={handleUpdateObject}
+        />
       </aside>
 
       {/* DRAWER TABLET DAN HP */}
@@ -183,11 +377,30 @@ export default function EditorWorkspace({ selectedFile }) {
                   onPageSelect={handlePageSelect}
                 />
               ) : (
-                <PropertiesPanel />
+                <PropertiesPanel
+                  selectedObject={selectedObject}
+                  onDeleteObject={handleDeleteObject}
+                />
               )}
             </div>
           </div>
         </div>
+      )}
+
+      {/* SIGNATURE MODAL */}
+      {isSignatureModalOpen && (
+        <SignatureModal
+          onClose={() => setIsSignatureModalOpen(false)}
+          onSave={handleSaveSignature}
+        />
+      )}
+
+      {/* STAMP PICKER MODAL */}
+      {isStampPickerOpen && (
+        <StampPickerModal
+          onClose={() => setIsStampPickerOpen(false)}
+          onSelect={handleStampSelect}
+        />
       )}
     </section>
   );

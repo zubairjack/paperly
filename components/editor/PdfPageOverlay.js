@@ -21,42 +21,71 @@ export default function PdfPageOverlay({
   onSelectObject,
   onAddObject,
   onUpdateObject,
+  selectedStamp,
 }) {
   const dragRef = useRef(null);
 
-  // Menambahkan objek teks
   const handleOverlayClick = (event) => {
-    if (activeTool !== "text") return;
-
     if (event.target.closest("[data-editor-object]")) return;
+
+    if (activeTool !== "text" && activeTool !== "stamp") return;
 
     const rect = event.currentTarget.getBoundingClientRect();
 
     const x = ((event.clientX - rect.left) / rect.width) * 100;
     const y = ((event.clientY - rect.top) / rect.height) * 100;
 
-    onAddObject({
-      id: generateId(),
-      type: "text",
-      pageNumber,
-      x,
-      y,
-      width: 25,
-      height: 6,
-      content: "Teks baru",
-    });
+    // Menambahkan objek teks
+    if (activeTool === "text") {
+      onAddObject({
+        id: generateId(),
+        type: "text",
+        pageNumber,
+        x,
+        y,
+        width: 25,
+        height: 6,
+        content: "Teks baru",
+      });
+
+      return;
+    }
+
+    // Menambahkan objek stempel
+    if (activeTool === "stamp" && selectedStamp) {
+      onAddObject({
+        id: generateId(),
+        type: "stamp",
+        pageNumber,
+        x: Math.max(0, Math.min(100 - 30, x - 15)),
+        y: Math.max(0, Math.min(100 - 10, y - 5)),
+        width: 30,
+        height: 10,
+        content: selectedStamp.label,
+        stampLabel: selectedStamp.label,
+        stampColor: selectedStamp.color,
+        stampShape: selectedStamp.shape,
+        stampDescription: selectedStamp.description,
+      });
+
+      onSelectObject(null);
+
+      return;
+    }
   };
 
-  // Memulai Move atau Resize
   const handlePointerDown = (event) => {
     if (activeTool !== "select") return;
     if (event.button !== 0) return;
 
     const resizeHandle = event.target.closest("[data-resize-handle]");
-
     const objectElement = event.target.closest("[data-editor-object]");
 
-    if (!objectElement) return;
+    // Klik area kosong untuk membatalkan seleksi.
+    if (!objectElement) {
+      onSelectObject(null);
+      return;
+    }
 
     const objectId = objectElement.dataset.editorObject;
     const object = objects.find((item) => item.id === objectId);
@@ -74,6 +103,7 @@ export default function PdfPageOverlay({
     dragRef.current = {
       mode: resizeHandle ? "resize" : "move",
       objectId: object.id,
+      isSignature: object.type === "signature",
       startX: event.clientX,
       startY: event.clientY,
       originalX: object.x,
@@ -82,12 +112,12 @@ export default function PdfPageOverlay({
       originalHeight: object.height,
       pageWidth: rect.width,
       pageHeight: rect.height,
+      aspectRatio: (object.width * rect.width) / (object.height * rect.height),
     };
 
     overlay.setPointerCapture(event.pointerId);
   };
 
-  // Memproses gerakan mouse
   const handlePointerMove = (event) => {
     const drag = dragRef.current;
 
@@ -101,31 +131,38 @@ export default function PdfPageOverlay({
       const maxX = Math.max(0, 100 - drag.originalWidth);
       const maxY = Math.max(0, 100 - drag.originalHeight);
 
-      const newX = Math.max(0, Math.min(maxX, drag.originalX + deltaX));
-
-      const newY = Math.max(0, Math.min(maxY, drag.originalY + deltaY));
-
       onUpdateObject(drag.objectId, {
-        x: newX,
-        y: newY,
+        x: Math.max(0, Math.min(maxX, drag.originalX + deltaX)),
+        y: Math.max(0, Math.min(maxY, drag.originalY + deltaY)),
       });
 
       return;
     }
 
     if (drag.mode === "resize") {
-      const maxWidth = 100 - drag.originalX;
-      const maxHeight = 100 - drag.originalY;
+      let newWidth = drag.originalWidth + deltaX;
+      let newHeight = drag.originalHeight + deltaY;
 
-      const newWidth = Math.max(
-        5,
-        Math.min(maxWidth, drag.originalWidth + deltaX),
-      );
+      if (drag.isSignature) {
+        // Tanda tangan tetap mempertahankan rasio gambar.
+        const ratio = drag.aspectRatio;
 
-      const newHeight = Math.max(
-        3,
-        Math.min(maxHeight, drag.originalHeight + deltaY),
-      );
+        const maxWidthByPage = 100 - drag.originalX;
+
+        const maxWidthByHeight =
+          ((100 - drag.originalY) * drag.pageHeight * ratio) / drag.pageWidth;
+
+        const maxWidth = Math.min(maxWidthByPage, maxWidthByHeight);
+
+        newWidth = Math.max(2, Math.min(maxWidth, newWidth));
+
+        newHeight = (newWidth * drag.pageWidth) / (ratio * drag.pageHeight);
+      } else {
+        // Objek teks bebas diubah lebar dan tingginya.
+        newWidth = Math.max(2, Math.min(100 - drag.originalX, newWidth));
+
+        newHeight = Math.max(2, Math.min(100 - drag.originalY, newHeight));
+      }
 
       onUpdateObject(drag.objectId, {
         width: newWidth,
@@ -134,9 +171,35 @@ export default function PdfPageOverlay({
     }
   };
 
-  // Mengakhiri Move atau Resize
   const handlePointerUp = () => {
     dragRef.current = null;
+  };
+
+  const handleSignatureLoad = (event, object) => {
+    if (object.aspectRatioAdjusted) return;
+
+    const image = event.currentTarget;
+    const overlay = image.parentElement.parentElement;
+    const rect = overlay.getBoundingClientRect();
+
+    if (!image.naturalWidth || !image.naturalHeight) return;
+
+    // Menghitung rasio gambar tanda tangan
+    const imageRatio = image.naturalWidth / image.naturalHeight;
+
+    // Menghitung lebar objek dalam pixel
+    const objectWidthPx = (object.width / 100) * rect.width;
+
+    // Menghitung tinggi berdasarkan rasio gambar
+    const objectHeightPx = objectWidthPx / imageRatio;
+
+    // Mengubah tinggi pixel menjadi persentase halaman
+    const newHeight = (objectHeightPx / rect.height) * 100;
+
+    onUpdateObject(object.id, {
+      height: newHeight,
+      aspectRatioAdjusted: true,
+    });
   };
 
   return (
@@ -154,17 +217,23 @@ export default function PdfPageOverlay({
         .filter((object) => object.pageNumber === pageNumber)
         .map((object) => {
           const isSelected = selectedObjectId === object.id;
+          const isSignature = object.type === "signature";
 
           return (
             <div
               key={object.id}
               data-editor-object={object.id}
-              className={`absolute p-1 text-sm text-black ${
-                activeTool === "select" ? "cursor-move" : "cursor-text"
+              className={`absolute ${
+                activeTool === "select" ||
+                (activeTool === "text" && object.type === "text")
+                  ? "cursor-move"
+                  : "cursor-default"
               } ${
-                isSelected
-                  ? "border-2 border-primary bg-blue-50/90"
-                  : "border border-dashed border-primary bg-white/90"
+                isSelected &&
+                (activeTool === "select" ||
+                  (activeTool === "text" && object.type === "text"))
+                  ? "border-2 border-primary bg-blue-50/30"
+                  : "border border-transparent"
               }`}
               style={{
                 left: `${object.x}%`,
@@ -174,21 +243,54 @@ export default function PdfPageOverlay({
                 pointerEvents: "auto",
               }}
             >
-              <textarea
-                value={object.content}
-                readOnly={activeTool !== "text"}
-                onChange={(event) =>
-                  onUpdateObject(object.id, {
-                    content: event.target.value,
-                  })
-                }
-                onClick={(event) => event.stopPropagation()}
-                onKeyDown={(event) => event.stopPropagation()}
-                aria-label="Edit teks PDF"
-                className="h-full min-h-8 w-full resize-none border-0 bg-transparent p-0 text-sm text-black outline-none"
-              />
+              {isSignature ? (
+                <img
+                  src={object.content}
+                  alt="Tanda tangan"
+                  draggable="false"
+                  onLoad={(event) => handleSignatureLoad(event, object)}
+                  className="h-full w-full select-none object-fill"
+                />
+              ) : object.type === "stamp" ? (
+                <div
+                  className={`flex h-full w-full items-center justify-center border-[3px] px-2 text-center font-extrabold tracking-wider ${
+                    object.stampShape === "round"
+                      ? "rounded-full"
+                      : "rounded-sm"
+                  }`}
+                  style={{
+                    color: object.stampColor,
+                    borderColor: object.stampColor,
+                    opacity: object.opacity ?? 1,
+                    transform: `rotate(${object.rotation ?? 0}deg)`,
+                    fontSize: "clamp(8px, 1.2vw, 16px)",
+                  }}
+                >
+                  {object.stampLabel}
+                </div>
+              ) : (
+                <textarea
+                  value={object.content}
+                  readOnly={activeTool !== "text"}
+                  onChange={(event) =>
+                    onUpdateObject(object.id, {
+                      content: event.target.value,
+                    })
+                  }
+                  onClick={(event) => event.stopPropagation()}
+                  onKeyDown={(event) => event.stopPropagation()}
+                  aria-label="Edit teks PDF"
+                  className="h-full min-h-8 w-full resize-none border-0 bg-transparent p-1 outline-none"
+                  style={{
+                    fontSize: `${object.fontSize ?? 14}px`,
+                    color: object.color ?? "#000000",
+                    fontWeight: object.fontWeight ?? "normal",
+                    fontStyle: object.fontStyle ?? "normal",
+                    textAlign: object.textAlign ?? "left",
+                  }}
+                />
+              )}
 
-              {/* Handle Resize */}
               {isSelected && activeTool === "select" && (
                 <div
                   data-resize-handle="true"
